@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -9,27 +10,29 @@ import (
 )
 
 func main() {
-	fmt.Println("Setting up Server...")
+	log.Println("Setting up Server...")
 	var apiCfg apiConfig
 	mux := http.NewServeMux()
 	serv := &http.Server{
 		Addr:    ":8080",
 		Handler: mux,
 	}
-	fmt.Println("Setting up web app...")
+	log.Println("Setting up web app...")
 	handler := http.StripPrefix("/app/", http.FileServer(http.Dir(".")))
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(handler))
-	fmt.Println("Setting up health endpoint...")
+	log.Println("Setting up health endpoint...")
 	mux.HandleFunc("GET /api/healthz", checkHealth)
-	fmt.Println("Setting up metrics endpoint...")
+	log.Println("Setting up metrics endpoint...")
 	mux.HandleFunc("GET /admin/metrics", apiCfg.checkMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.resetMetrics)
-	fmt.Println("Starting Server...")
+	log.Println("Setting up validation endpoint...")
+	mux.HandleFunc("POST /api/validate_chirp", validateChirp)
+	log.Println("Starting Server...")
 	log.Fatal(serv.ListenAndServe())
 }
 
 func checkHealth(w http.ResponseWriter, req *http.Request) {
-	fmt.Println("Health endpoint hit!")
+	log.Println("Health endpoint hit!")
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	int, err := io.WriteString(w, "OK")
@@ -44,7 +47,7 @@ type apiConfig struct {
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 	handler := func(w http.ResponseWriter, req *http.Request) {
-		fmt.Println("Incrementing pagecount...")
+		log.Println("Incrementing pagecount...")
 		cfg.fileServerHits.Add(1)
 		next.ServeHTTP(w, req)
 	}
@@ -52,7 +55,7 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 }
 
 func (cfg *apiConfig) checkMetrics(w http.ResponseWriter, req *http.Request) {
-	fmt.Println("Checking metrics...")
+	log.Println("Checking metrics...")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	body := fmt.Sprintf(`<html>
@@ -68,7 +71,7 @@ func (cfg *apiConfig) checkMetrics(w http.ResponseWriter, req *http.Request) {
 }
 
 func (cfg *apiConfig) resetMetrics(w http.ResponseWriter, req *http.Request) {
-	fmt.Println("Resetting metrics...")
+	log.Println("Resetting metrics...")
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	cfg.fileServerHits.Store(0)
@@ -76,4 +79,49 @@ func (cfg *apiConfig) resetMetrics(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		log.Fatal(err, int)
 	}
+}
+
+func validateChirp(w http.ResponseWriter, req *http.Request) {
+	log.Println("Chirp sent in for validation!")
+	type reqBody struct {
+		Body string `json:"body"`
+	}
+	decoder := json.NewDecoder(req.Body)
+	rb := reqBody{}
+	err := decoder.Decode(&rb)
+	if err != nil {
+		log.Printf("Error decoding body: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	type invalidResponse struct {
+		Error string `json:"error"`
+	}
+	log.Println(rb.Body)
+	if len(rb.Body) > 140 {
+		resp, err := json.Marshal(invalidResponse{Error: "Chirp is too long"})
+		log.Println("too long!")
+		if err != nil {
+			log.Printf("Error encording error: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(400)
+		w.Write(resp)
+		return
+	}
+	type validResponse struct {
+		Valid bool `json:"valid"`
+	}
+	resp, err := json.Marshal(validResponse{Valid: true})
+	if err != nil {
+		log.Printf("Error encording error: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	w.Write(resp)
+	log.Println("chirp validated!")
 }
