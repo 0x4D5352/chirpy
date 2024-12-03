@@ -9,20 +9,27 @@ import (
 )
 
 func main() {
+	fmt.Println("Setting up Server...")
 	apiCfg := apiConfig{}
+	apiCfg.fileServerHits.Store(0)
 	mux := http.NewServeMux()
 	serv := &http.Server{
 		Addr:    ":8080",
 		Handler: mux,
 	}
+	fmt.Println("Setting up web app...")
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app/", http.FileServer(http.Dir(".")))))
+	fmt.Println("Setting up health endpoint...")
 	mux.HandleFunc("/healthz", checkHealth)
+	fmt.Println("Setting up metrics endpoint...")
 	mux.HandleFunc("/metrics", apiCfg.checkMetrics)
 	mux.HandleFunc("/reset", apiCfg.resetMetrics)
+	fmt.Println("Starting Server...")
 	log.Fatal(serv.ListenAndServe())
 }
 
 func checkHealth(w http.ResponseWriter, req *http.Request) {
+	fmt.Println("Health endpoint hit!")
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	int, err := io.WriteString(w, "OK")
@@ -32,27 +39,30 @@ func checkHealth(w http.ResponseWriter, req *http.Request) {
 }
 
 type apiConfig struct {
-	fileserverHits atomic.Int32
+	fileServerHits atomic.Int32
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
-	cfg.fileserverHits.Add(1)
+	fmt.Println("Incrementing pagecount...")
+	cfg.fileServerHits.Add(1)
 	handler := next
 	return handler
 }
 func (cfg *apiConfig) checkMetrics(w http.ResponseWriter, req *http.Request) {
+	fmt.Println("Checking metrics...")
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	int, err := io.WriteString(w, fmt.Sprintf("Hits: %v", cfg.fileserverHits.Load()))
+	int, err := io.WriteString(w, fmt.Sprintf("Hits: %v", cfg.fileServerHits.Load()))
 	if err != nil {
 		log.Fatal(err, int)
 	}
 }
 
 func (cfg *apiConfig) resetMetrics(w http.ResponseWriter, req *http.Request) {
+	fmt.Println("Resetting metrics...")
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	cfg.fileserverHits.Swap(0)
+	cfg.fileServerHits.Store(0)
 	int, err := io.WriteString(w, "Metrics reset!")
 	if err != nil {
 		log.Fatal(err, int)
