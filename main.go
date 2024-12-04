@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"sync/atomic"
 )
 
@@ -112,9 +113,19 @@ func validateChirp(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	type validResponse struct {
-		Valid bool `json:"valid"`
+		CleanedBody string `json:"cleaned_body"`
 	}
-	resp, err := json.Marshal(validResponse{Valid: true})
+	contents := strings.Fields(rb.Body)
+	for i, word := range contents {
+		lw := strings.ToLower(word)
+		if lw != "kerfuffle" && lw != "sharbert" && lw != "fornax" {
+			continue
+		}
+		contents[i] = "****"
+	}
+	resp, err := json.Marshal(validResponse{
+		CleanedBody: strings.Join(contents, " "),
+	})
 	if err != nil {
 		log.Printf("Error encording error: %s", err)
 		w.WriteHeader(500)
