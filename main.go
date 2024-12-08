@@ -1,18 +1,34 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
+
+	"github.com/0x4D5352/chirpy/internal/database"
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 )
 
 func main() {
+	log.Println("Setting up Database...")
+	godotenv.Load()
+	dbURL := os.Getenv("DB_URL")
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatal(err)
+	}
+	dbQueries := database.New(db)
 	log.Println("Setting up Server...")
-	var apiCfg apiConfig
+	apiCfg := apiConfig{
+		queries: dbQueries,
+	}
 	mux := http.NewServeMux()
 	serv := &http.Server{
 		Addr:    ":8080",
@@ -42,8 +58,10 @@ func checkHealth(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
+// TODO: Decide if you should be storing the server in the config or not.
 type apiConfig struct {
 	fileServerHits atomic.Int32
+	queries        *database.Queries
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
