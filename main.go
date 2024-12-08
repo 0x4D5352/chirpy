@@ -159,6 +159,13 @@ func validateChirp(w http.ResponseWriter, req *http.Request) {
 	log.Println("chirp validated!")
 }
 
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
+}
+
 func (cfg *apiConfig) createUser(w http.ResponseWriter, req *http.Request) {
 	log.Println("User creation requested!")
 	type reqBody struct {
@@ -173,12 +180,6 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(500)
 		return
 	}
-	type validResponse struct {
-		ID        uuid.UUID
-		CreatedAt time.Time
-		UpdatedAt time.Time
-		Email     string
-	}
 	user, err := cfg.db.CreateUser(req.Context(), rb.Email)
 	// TODO: send invalid response body
 	if err != nil {
@@ -186,7 +187,7 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(500)
 		return
 	}
-	resp, err := json.Marshal(validResponse{
+	resp, err := json.Marshal(User{
 		ID:        user.ID,
 		CreatedAt: user.CreatedAt,
 		UpdatedAt: user.UpdatedAt,
