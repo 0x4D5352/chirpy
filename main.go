@@ -10,8 +10,10 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/0x4D5352/chirpy/internal/database"
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
@@ -27,7 +29,7 @@ func main() {
 	dbQueries := database.New(db)
 	log.Println("Setting up Server...")
 	apiCfg := apiConfig{
-		queries: dbQueries,
+		db: dbQueries,
 	}
 	mux := http.NewServeMux()
 	serv := &http.Server{
@@ -44,6 +46,8 @@ func main() {
 	mux.HandleFunc("POST /admin/reset", apiCfg.resetMetrics)
 	log.Println("Setting up validation endpoint...")
 	mux.HandleFunc("POST /api/validate_chirp", validateChirp)
+	log.Println("Setting up user creation endpoint...")
+	mux.HandleFunc("POST /api/users", apiCfg.createUser)
 	log.Println("Starting Server...")
 	log.Fatal(serv.ListenAndServe())
 }
@@ -61,7 +65,7 @@ func checkHealth(w http.ResponseWriter, req *http.Request) {
 // TODO: Decide if you should be storing the server in the config or not.
 type apiConfig struct {
 	fileServerHits atomic.Int32
-	queries        *database.Queries
+	db             *database.Queries
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -145,7 +149,7 @@ func validateChirp(w http.ResponseWriter, req *http.Request) {
 		CleanedBody: strings.Join(contents, " "),
 	})
 	if err != nil {
-		log.Printf("Error encording error: %s", err)
+		log.Printf("Error encording response: %s", err)
 		w.WriteHeader(500)
 		return
 	}
@@ -153,4 +157,48 @@ func validateChirp(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(200)
 	w.Write(resp)
 	log.Println("chirp validated!")
+}
+
+func (cfg *apiConfig) createUser(w http.ResponseWriter, req *http.Request) {
+	log.Println("User creation requested!")
+	type reqBody struct {
+		Email string `json:"email"`
+	}
+	// TODO: add validation?
+	decoder := json.NewDecoder(req.Body)
+	rb := reqBody{}
+	err := decoder.Decode(&rb)
+	if err != nil {
+		log.Printf("Error decoding body: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	type validResponse struct {
+		ID        uuid.UUID
+		CreatedAt time.Time
+		UpdatedAt time.Time
+		Email     string
+	}
+	user, err := cfg.db.CreateUser(req.Context(), rb.Email)
+	// TODO: send invalid response body
+	if err != nil {
+		log.Printf("Error creating user: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	resp, err := json.Marshal(validResponse{
+		ID:        user.ID,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+	})
+	if err != nil {
+		log.Printf("Error encording response: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	w.Write(resp)
+	log.Println("user created!")
 }
