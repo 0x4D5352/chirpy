@@ -8,7 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
+	// "strings"
 	"sync/atomic"
 	"time"
 
@@ -54,8 +54,9 @@ func main() {
 	log.Println("Setting up user creation endpoint...")
 	mux.HandleFunc("POST /api/users", apiCfg.createUser)
 
-	log.Println("Setting up chrips endpoint...")
+	log.Println("Setting up chirps endpoint...")
 	mux.HandleFunc("POST /api/chirps", apiCfg.postChirp)
+	mux.HandleFunc("GET /api/chirps", apiCfg.getChirps)
 
 	log.Println("Starting Server...")
 	log.Fatal(serv.ListenAndServe())
@@ -129,7 +130,7 @@ func (cfg *apiConfig) resetMetrics(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-type Post struct {
+type Chirp struct {
 	ID        uuid.UUID `json:"id"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -170,17 +171,18 @@ func (cfg *apiConfig) postChirp(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	contents := strings.Fields(rb.Body)
-	for i, word := range contents {
-		lw := strings.ToLower(word)
-		if lw != "kerfuffle" && lw != "sharbert" && lw != "fornax" {
-			continue
-		}
-		contents[i] = "****"
-	}
-
+	// contents := strings.Fields(rb.Body)
+	// for i, word := range contents {
+	// 	lw := strings.ToLower(word)
+	// 	if lw != "kerfuffle" && lw != "sharbert" && lw != "fornax" {
+	// 		continue
+	// 	}
+	// 	contents[i] = "****"
+	// }
+	//
 	chirp, err := cfg.db.CreateChirp(req.Context(), database.CreateChirpParams{
-		Body:   strings.Join(contents, " "),
+		// Body:   strings.Join(contents, " "),
+		Body:   rb.Body,
 		UserID: rb.UserID,
 	})
 	if err != nil {
@@ -189,7 +191,7 @@ func (cfg *apiConfig) postChirp(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	resp, err := json.Marshal(Post{
+	resp, err := json.Marshal(Chirp{
 		ID:        chirp.ID,
 		CreatedAt: chirp.CreatedAt,
 		UpdatedAt: chirp.UpdatedAt,
@@ -206,6 +208,32 @@ func (cfg *apiConfig) postChirp(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 	w.Write(resp)
 	log.Println("Chirp posted!")
+}
+
+func (cfg *apiConfig) getChirps(w http.ResponseWriter, req *http.Request) {
+	log.Println("Sending all chirps!")
+	chirps, err := cfg.db.GetChirps(req.Context())
+	if err != nil {
+		log.Printf("Error getting chirps! %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	var respChirps []Chirp
+	for _, chirp := range chirps {
+		respChirps = append(respChirps, Chirp(chirp))
+	}
+
+	resp, err := json.Marshal(respChirps)
+	if err != nil {
+		log.Printf("Error encoding response: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(resp)
+	log.Println("Chirps sent successfully!")
 }
 
 type User struct {
