@@ -19,35 +19,44 @@ import (
 )
 
 func main() {
-	log.Println("Setting up Database...")
 	godotenv.Load()
+
+	log.Println("Setting up Database...")
 	dbURL := os.Getenv("DB_URL")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Fatal(err)
 	}
 	dbQueries := database.New(db)
+
 	log.Println("Setting up Server...")
 	apiCfg := apiConfig{
-		db: dbQueries,
+		db:       dbQueries,
+		platform: os.Getenv("PLATFORM"),
 	}
 	mux := http.NewServeMux()
 	serv := &http.Server{
 		Addr:    ":8080",
 		Handler: mux,
 	}
+
 	log.Println("Setting up web app...")
 	handler := http.StripPrefix("/app/", http.FileServer(http.Dir(".")))
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(handler))
+
 	log.Println("Setting up health endpoint...")
 	mux.HandleFunc("GET /api/healthz", checkHealth)
-	log.Println("Setting up metrics endpoint...")
+
+	log.Println("Setting up admin endpoints...")
 	mux.HandleFunc("GET /admin/metrics", apiCfg.checkMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.resetMetrics)
+
 	log.Println("Setting up validation endpoint...")
 	mux.HandleFunc("POST /api/validate_chirp", validateChirp)
+
 	log.Println("Setting up user creation endpoint...")
 	mux.HandleFunc("POST /api/users", apiCfg.createUser)
+
 	log.Println("Starting Server...")
 	log.Fatal(serv.ListenAndServe())
 }
@@ -66,6 +75,7 @@ func checkHealth(w http.ResponseWriter, req *http.Request) {
 type apiConfig struct {
 	fileServerHits atomic.Int32
 	db             *database.Queries
+	platform       string
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -94,10 +104,25 @@ func (cfg *apiConfig) checkMetrics(w http.ResponseWriter, req *http.Request) {
 }
 
 func (cfg *apiConfig) resetMetrics(w http.ResponseWriter, req *http.Request) {
+	if cfg.platform != "dev" {
+		log.Println("Unauthorized request to reset endpoint!")
+		log.Printf("%+v", req)
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
 	log.Println("Resetting metrics...")
+	cfg.fileServerHits.Store(0)
+
+	log.Println("Resetting database...")
+	err := cfg.db.ResetUsers(req.Context())
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Fatal(err)
+	}
+
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	cfg.fileServerHits.Store(0)
 	int, err := io.WriteString(w, "Metrics reset!")
 	if err != nil {
 		log.Fatal(err, int)
@@ -114,9 +139,10 @@ func validateChirp(w http.ResponseWriter, req *http.Request) {
 	err := decoder.Decode(&rb)
 	if err != nil {
 		log.Printf("Error decoding body: %s", err)
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+
 	type invalidResponse struct {
 		Error string `json:"error"`
 	}
@@ -126,14 +152,15 @@ func validateChirp(w http.ResponseWriter, req *http.Request) {
 		log.Println("too long!")
 		if err != nil {
 			log.Printf("Error encording error: %s", err)
-			w.WriteHeader(500)
+			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(400)
+		w.WriteHeader(http.StatusBadRequest)
 		w.Write(resp)
 		return
 	}
+
 	type validResponse struct {
 		CleanedBody string `json:"cleaned_body"`
 	}
@@ -145,16 +172,18 @@ func validateChirp(w http.ResponseWriter, req *http.Request) {
 		}
 		contents[i] = "****"
 	}
+
 	resp, err := json.Marshal(validResponse{
 		CleanedBody: strings.Join(contents, " "),
 	})
 	if err != nil {
 		log.Printf("Error encording response: %s", err)
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
+	w.WriteHeader(http.StatusOK)
 	w.Write(resp)
 	log.Println("chirp validated!")
 }
@@ -177,16 +206,18 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, req *http.Request) {
 	err := decoder.Decode(&rb)
 	if err != nil {
 		log.Printf("Error decoding body: %s", err)
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+
 	user, err := cfg.db.CreateUser(req.Context(), rb.Email)
 	// TODO: send invalid response body
 	if err != nil {
 		log.Printf("Error creating user: %s", err)
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+
 	resp, err := json.Marshal(User{
 		ID:        user.ID,
 		CreatedAt: user.CreatedAt,
@@ -195,11 +226,12 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, req *http.Request) {
 	})
 	if err != nil {
 		log.Printf("Error encording response: %s", err)
-		w.WriteHeader(500)
+		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
+	w.WriteHeader(http.StatusCreated)
 	w.Write(resp)
 	log.Println("user created!")
 }
