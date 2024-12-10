@@ -56,7 +56,8 @@ func main() {
 
 	log.Println("Setting up chirps endpoint...")
 	mux.HandleFunc("POST /api/chirps", apiCfg.postChirp)
-	mux.HandleFunc("GET /api/chirps", apiCfg.getChirps)
+	mux.HandleFunc("GET /api/chirps/", apiCfg.getChirps)
+	mux.HandleFunc("GET /api/chirps/{id}", apiCfg.getChirp)
 
 	log.Println("Starting Server...")
 	log.Fatal(serv.ListenAndServe())
@@ -210,8 +211,35 @@ func (cfg *apiConfig) postChirp(w http.ResponseWriter, req *http.Request) {
 	log.Println("Chirp posted!")
 }
 
+func (cfg *apiConfig) getChirp(w http.ResponseWriter, req *http.Request) {
+	chirpID, err := uuid.Parse(req.PathValue("id"))
+	if err != nil {
+		log.Printf("Error parsing ID! %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	log.Println("Grabbing chirp!")
+	chirp, err := cfg.db.GetChirp(req.Context(), chirpID)
+	if err != nil {
+		log.Printf("Error getting chirp! %v", err)
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	resp, err := json.Marshal(Chirp(chirp))
+	if err != nil {
+		log.Printf("Error encoding response: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(resp)
+}
+
 func (cfg *apiConfig) getChirps(w http.ResponseWriter, req *http.Request) {
-	log.Println("Sending all chirps!")
+	log.Println("Grabbing all chirps!")
 	chirps, err := cfg.db.GetChirps(req.Context())
 	if err != nil {
 		log.Printf("Error getting chirps! %v", err)
@@ -233,7 +261,6 @@ func (cfg *apiConfig) getChirps(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(resp)
-	log.Println("Chirps sent successfully!")
 }
 
 type User struct {
