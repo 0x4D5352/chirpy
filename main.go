@@ -51,11 +51,11 @@ func main() {
 	mux.HandleFunc("GET /admin/metrics", apiCfg.checkMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.resetMetrics)
 
-	log.Println("Setting up validation endpoint...")
-	mux.HandleFunc("POST /api/validate_chirp", validateChirp)
-
 	log.Println("Setting up user creation endpoint...")
 	mux.HandleFunc("POST /api/users", apiCfg.createUser)
+
+	log.Println("Setting up chrips endpoint...")
+	mux.HandleFunc("POST /api/chirps", apiCfg.postChirp)
 
 	log.Println("Starting Server...")
 	log.Fatal(serv.ListenAndServe())
@@ -129,10 +129,19 @@ func (cfg *apiConfig) resetMetrics(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func validateChirp(w http.ResponseWriter, req *http.Request) {
-	log.Println("Chirp sent in for validation!")
+type Post struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Body      string    `json:"body"`
+	UserID    uuid.UUID `json:"user_id"`
+}
+
+func (cfg *apiConfig) postChirp(w http.ResponseWriter, req *http.Request) {
+	log.Println("Chirp received!")
 	type reqBody struct {
-		Body string `json:"body"`
+		Body   string    `json:"body"`
+		UserID uuid.UUID `json:"user_id"`
 	}
 	decoder := json.NewDecoder(req.Body)
 	rb := reqBody{}
@@ -161,9 +170,6 @@ func validateChirp(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	type validResponse struct {
-		CleanedBody string `json:"cleaned_body"`
-	}
 	contents := strings.Fields(rb.Body)
 	for i, word := range contents {
 		lw := strings.ToLower(word)
@@ -173,19 +179,33 @@ func validateChirp(w http.ResponseWriter, req *http.Request) {
 		contents[i] = "****"
 	}
 
-	resp, err := json.Marshal(validResponse{
-		CleanedBody: strings.Join(contents, " "),
+	chirp, err := cfg.db.CreateChirp(req.Context(), database.CreateChirpParams{
+		Body:   strings.Join(contents, " "),
+		UserID: rb.UserID,
 	})
 	if err != nil {
-		log.Printf("Error encording response: %s", err)
+		log.Printf("Error creating Chirp: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	resp, err := json.Marshal(Post{
+		ID:        chirp.ID,
+		CreatedAt: chirp.CreatedAt,
+		UpdatedAt: chirp.UpdatedAt,
+		Body:      chirp.Body,
+		UserID:    chirp.UserID,
+	})
+	if err != nil {
+		log.Printf("Error encoding response: %s", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusCreated)
 	w.Write(resp)
-	log.Println("chirp validated!")
+	log.Println("Chirp posted!")
 }
 
 type User struct {
@@ -233,5 +253,5 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	w.Write(resp)
-	log.Println("user created!")
+	log.Println("User created!")
 }
