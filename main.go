@@ -8,10 +8,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+
 	// "strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/0x4D5352/chirpy/internal/auth"
 	"github.com/0x4D5352/chirpy/internal/database"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
@@ -51,8 +53,9 @@ func main() {
 	mux.HandleFunc("GET /admin/metrics", apiCfg.checkMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.resetMetrics)
 
-	log.Println("Setting up user creation endpoint...")
+	log.Println("Setting up user endpoints...")
 	mux.HandleFunc("POST /api/users", apiCfg.createUser)
+	mux.HandleFunc("POST /api/login", apiCfg.loginUser)
 
 	log.Println("Setting up chirps endpoint...")
 	mux.HandleFunc("POST /api/chirps", apiCfg.postChirp)
@@ -270,14 +273,16 @@ type User struct {
 	Email     string    `json:"email"`
 }
 
+type userRequest struct {
+	Password string `json:"password"`
+	Email    string `json:"email"`
+}
+
 func (cfg *apiConfig) createUser(w http.ResponseWriter, req *http.Request) {
 	log.Println("User creation requested!")
-	type reqBody struct {
-		Email string `json:"email"`
-	}
 	// TODO: add validation?
 	decoder := json.NewDecoder(req.Body)
-	rb := reqBody{}
+	rb := userRequest{}
 	err := decoder.Decode(&rb)
 	if err != nil {
 		log.Printf("Error decoding body: %s", err)
@@ -285,7 +290,17 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	user, err := cfg.db.CreateUser(req.Context(), rb.Email)
+	hp, err := auth.HashPassword(rb.Password)
+	if err != nil {
+		log.Printf("Error hashing password: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	user, err := cfg.db.CreateUser(req.Context(), database.CreateUserParams{
+		Email:          rb.Email,
+		HashedPassword: hp,
+	})
 	// TODO: send invalid response body
 	if err != nil {
 		log.Printf("Error creating user: %s", err)
@@ -309,4 +324,47 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 	w.Write(resp)
 	log.Println("User created!")
+}
+
+func (cfg *apiConfig) loginUser(w http.ResponseWriter, req *http.Request) {
+	log.Println("User login requested!")
+	decoder := json.NewDecoder(req.Body)
+	rb := userRequest{}
+	err := decoder.Decode(&rb)
+	if err != nil {
+		log.Printf("Error decoding body: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	user, err := cfg.db.FindUserByEmail(req.Context(), rb.Email)
+	if err != nil {
+		log.Printf("Error finding user: %s", err)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, "Incorrect email or password.")
+		return
+	}
+	if err = auth.CheckPasswordHash(rb.Password, user.HashedPassword); err != nil {
+		log.Printf("Password Check Failed: %s", err)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, "Incorrect email or password.")
+		return
+	}
+	resp, err := json.Marshal(User{
+		ID:        user.ID,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+	})
+	if err != nil {
+		log.Printf("Error encording response: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(resp)
+	log.Println("User successfully logged in!")
+
 }
