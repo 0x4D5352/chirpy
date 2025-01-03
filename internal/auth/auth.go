@@ -1,6 +1,9 @@
 package auth
 
 import (
+	"fmt"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"
@@ -28,7 +31,7 @@ func MakeJWT(userID uuid.UUID, tokenSecret string, expiresIn time.Duration) (str
 		ExpiresAt: jwt.NewNumericDate(now.Add(expiresIn)),
 		IssuedAt:  jwt.NewNumericDate(now),
 	})
-	fullToken, err := token.SignedString(tokenSecret)
+	fullToken, err := token.SignedString([]byte(tokenSecret))
 	if err != nil {
 		return "", err
 	}
@@ -37,7 +40,7 @@ func MakeJWT(userID uuid.UUID, tokenSecret string, expiresIn time.Duration) (str
 
 func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &jwt.RegisteredClaims{}, func(token *jwt.Token) (interface{}, error) {
-		return tokenSecret, nil
+		return []byte(tokenSecret), nil
 	})
 	if err != nil {
 		return uuid.UUID{}, err
@@ -47,4 +50,16 @@ func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 		return uuid.UUID{}, err
 	}
 	return id, nil
+}
+
+func GetBearerToken(headers http.Header) (string, error) {
+	bearer := headers.Get("Authorization")
+	if bearer == "" {
+		return "", fmt.Errorf("Error: no auth header found")
+	}
+	token := strings.Split(bearer, " ")
+	if len(token) != 2 {
+		return "", fmt.Errorf("Error: Malformed bearer token - %s", bearer)
+	}
+	return token[1], nil
 }

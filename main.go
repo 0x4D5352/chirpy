@@ -35,6 +35,7 @@ func main() {
 	apiCfg := apiConfig{
 		db:       dbQueries,
 		platform: os.Getenv("PLATFORM"),
+		secret:   os.Getenv("SECRET"),
 	}
 	mux := http.NewServeMux()
 	serv := &http.Server{
@@ -81,6 +82,7 @@ type apiConfig struct {
 	fileServerHits atomic.Int32
 	db             *database.Queries
 	platform       string
+	secret         string
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -145,8 +147,7 @@ type Chirp struct {
 func (cfg *apiConfig) postChirp(w http.ResponseWriter, req *http.Request) {
 	log.Println("Chirp received!")
 	type reqBody struct {
-		Body   string    `json:"body"`
-		UserID uuid.UUID `json:"user_id"`
+		Body string `json:"body"`
 	}
 	decoder := json.NewDecoder(req.Body)
 	rb := reqBody{}
@@ -160,7 +161,26 @@ func (cfg *apiConfig) postChirp(w http.ResponseWriter, req *http.Request) {
 	type invalidResponse struct {
 		Error string `json:"error"`
 	}
-	log.Println(rb.Body)
+
+	bearerToken, err := auth.GetBearerToken(req.Header)
+	if err != nil {
+		log.Printf("Failed to pull token!s")
+		log.Printf("Attempted Post: %s", rb.Body)
+		log.Printf("Error: %s", err)
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	userID, err := auth.ValidateJWT(bearerToken, cfg.secret)
+	if err != nil {
+		log.Printf("Failed to validate token %s", bearerToken)
+		log.Printf("Attempted Post: %s", rb.Body)
+		log.Printf("Error: %s", err)
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	log.Printf("Checking length of post: %s", rb.Body)
 	if len(rb.Body) > 140 {
 		resp, err := json.Marshal(invalidResponse{Error: "Chirp is too long"})
 		log.Println("too long!")
@@ -187,7 +207,7 @@ func (cfg *apiConfig) postChirp(w http.ResponseWriter, req *http.Request) {
 	chirp, err := cfg.db.CreateChirp(req.Context(), database.CreateChirpParams{
 		// Body:   strings.Join(contents, " "),
 		Body:   rb.Body,
-		UserID: rb.UserID,
+		UserID: userID,
 	})
 	if err != nil {
 		log.Printf("Error creating Chirp: %s", err)
@@ -271,11 +291,13 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+	Token     string    `json:"token"`
 }
 
 type userRequest struct {
-	Password string `json:"password"`
-	Email    string `json:"email"`
+	Password         string `json:"password"`
+	Email            string `json:"email"`
+	ExpiresInSeconds int    `json:"expires_in_seconds"`
 }
 
 func (cfg *apiConfig) createUser(w http.ResponseWriter, req *http.Request) {
@@ -351,11 +373,25 @@ func (cfg *apiConfig) loginUser(w http.ResponseWriter, req *http.Request) {
 		_, _ = io.WriteString(w, "Incorrect email or password.")
 		return
 	}
+	var expirationDuration time.Duration
+	if rb.ExpiresInSeconds <= 0 || rb.ExpiresInSeconds > 3600 {
+		expirationDuration, err = time.ParseDuration("1h")
+	} else {
+		duration := fmt.Sprintf("%ds", rb.ExpiresInSeconds)
+		expirationDuration, err = time.ParseDuration(duration)
+	}
+	token, err := auth.MakeJWT(user.ID, cfg.secret, expirationDuration)
+	if err != nil {
+		log.Printf("Error creating JWT: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 	resp, err := json.Marshal(User{
 		ID:        user.ID,
 		CreatedAt: user.CreatedAt,
 		UpdatedAt: user.UpdatedAt,
 		Email:     user.Email,
+		Token:     token,
 	})
 	if err != nil {
 		log.Printf("Error encording response: %s", err)
