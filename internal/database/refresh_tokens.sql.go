@@ -61,13 +61,13 @@ func (q *Queries) GetRefreshToken(ctx context.Context, token string) (RefreshTok
 	return i, err
 }
 
-const getRefreshTokenss = `-- name: GetRefreshTokenss :many
+const getRefreshTokens = `-- name: GetRefreshTokens :many
 SELECT token, created_at, updated_at, user_id, expires_at, revoked_at FROM refresh_tokens
 ORDER BY created_at ASC
 `
 
-func (q *Queries) GetRefreshTokenss(ctx context.Context) ([]RefreshToken, error) {
-	rows, err := q.db.QueryContext(ctx, getRefreshTokenss)
+func (q *Queries) GetRefreshTokens(ctx context.Context) ([]RefreshToken, error) {
+	rows, err := q.db.QueryContext(ctx, getRefreshTokens)
 	if err != nil {
 		return nil, err
 	}

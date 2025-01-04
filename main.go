@@ -56,6 +56,7 @@ func main() {
 
 	log.Println("Setting up user endpoints...")
 	mux.HandleFunc("POST /api/users", apiCfg.createUser)
+	mux.HandleFunc("PUT /api/users", apiCfg.updateUser)
 	mux.HandleFunc("POST /api/login", apiCfg.loginUser)
 	mux.HandleFunc("POST /api/refresh", apiCfg.refreshUserToken)
 	mux.HandleFunc("POST /api/revoke", apiCfg.revokeUserToken)
@@ -348,6 +349,92 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 	w.Write(resp)
 	log.Println("User created!")
+}
+
+func (cfg *apiConfig) updateUser(w http.ResponseWriter, req *http.Request) {
+	log.Println("User account update requested!")
+	decoder := json.NewDecoder(req.Body)
+	rb := userRequest{}
+	err := decoder.Decode(&rb)
+	if err != nil {
+		log.Printf("Error decoding body: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	bearerToken, err := auth.GetBearerToken(req.Header)
+	if err != nil {
+		log.Printf("Failed to pull token!")
+		log.Printf("Error: %s", err)
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	userID, err := auth.ValidateJWT(bearerToken, cfg.secret)
+	if err != nil {
+		log.Printf("Failed to validate token %s", bearerToken)
+		log.Printf("Error: %s", err)
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	hp, err := auth.HashPassword(rb.Password)
+	if err != nil {
+		log.Printf("Error hashing password: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	err = cfg.db.UpdateUser(req.Context(), database.UpdateUserParams{
+		Email:          rb.Email,
+		HashedPassword: hp,
+		ID:             userID,
+	})
+	// TODO: send invalid response body
+	if err != nil {
+		log.Printf("Error updating user: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	user, err := cfg.db.FindUserByID(req.Context(), userID)
+
+	// TODO: move logic to access token function
+	expirationDuration, err := time.ParseDuration("1h")
+	token, err := auth.MakeJWT(user.ID, cfg.secret, expirationDuration)
+	if err != nil {
+		log.Printf("Error creating JWT: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	rawRefreshToken, err := auth.MakeRefreshToken()
+	if err != nil {
+		log.Printf("Error creating refresh token: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	refreshToken, err := cfg.db.CreateRefreshToken(req.Context(), database.CreateRefreshTokenParams{
+		Token:  rawRefreshToken,
+		UserID: user.ID,
+	})
+	if err != nil {
+		log.Printf("Error adding refresh token to database: %s", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	resp, err := json.Marshal(User{
+		ID:           user.ID,
+		CreatedAt:    user.CreatedAt,
+		UpdatedAt:    user.UpdatedAt,
+		Email:        user.Email,
+		Token:        token,
+		RefreshToken: refreshToken.Token,
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(resp)
+	log.Println("User account updated!")
 }
 
 func (cfg *apiConfig) loginUser(w http.ResponseWriter, req *http.Request) {
